@@ -1,0 +1,95 @@
+name: Infrastructure
+
+on:
+  pull_request:
+    paths:
+      - "infrastructure/**"
+      - "**/*.tf"
+  push:
+    branches: ["main"]
+    paths:
+      - "infrastructure/**"
+      - "**/*.tf"
+  workflow_dispatch:
+    inputs:
+      apply:
+        description: "Set to 'yes' to apply"
+        required: false
+        default: "no"
+        type: choice
+        options: ["no", "yes"]
+
+env:
+  TF_WORKING_DIR: infrastructure # adjust if your .tf files live in /infrastructure
+  AWS_REGION: ap-southeast-1
+
+permissions:
+  id-token: write # required for OIDC
+  contents: read # actions/checkout
+
+jobs:
+  terraform:
+    name: Terraform Plan & Apply
+    runs-on: ubuntu-latest
+    # Protect apply via an environment (optional but recommended)
+    # environment: prod
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::528757789708:role/github-oidc-role
+          aws-region: ap-southeast-1
+          role-session-name: gha-terraform
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.9.5
+
+      - name: Terraform fmt
+        working-directory: ${{ env.TF_WORKING_DIR }}
+        run: terraform fmt -recursive
+
+      - name: Terraform Init
+        working-directory: ${{ env.TF_WORKING_DIR }}
+        run: terraform init
+        # If you use a remote backend (S3 + DynamoDB lock), configure backend { } in code and remove -backend-config from here.
+
+      - name: Terraform Validate
+        working-directory: ${{ env.TF_WORKING_DIR }}
+        run: terraform validate
+
+      - name: Terraform Plan
+        id: plan
+        working-directory: ${{ env.TF_WORKING_DIR }}
+        run: |
+          terraform plan -var-file=variables.tfvars -no-color -out=tfplan.binary
+          terraform show -no-color tfplan.binary > tfplan.txt
+
+      - name: Upload plan artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: tfplan
+          path: ${{ env.TF_WORKING_DIR }}/tfplan.txt
+          if-no-files-found: warn
+
+      - name: Comment plan on PR
+        if: github.event_name == 'pull_request'
+        uses: marocchino/sticky-pull-request-comment@v2
+        with:
+          header: tf-plan
+          path: ${{ env.TF_WORKING_DIR }}/tfplan.txt
+
+      # APPLY on:
+      # - push to main
+      # - manual dispatch with input apply=yes
+      - name: Terraform Apply
+        if: |
+          (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
+          (github.event_name == 'workflow_dispatch' && inputs.apply == 'yes')
+        working-directory: ${{ env.TF_WORKING_DIR }}
+        run: terraform apply -auto-approve tfplan.binary

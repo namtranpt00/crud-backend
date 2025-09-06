@@ -1,2 +1,16 @@
 node_modules/
 .env
+
+# Terraform
+*.tfstate
+*.tfstate.*
+.crash
+.terraform/
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+.terraform.lock.hcl
+.terraformrc
+terraform.rc
+my-key.pem
